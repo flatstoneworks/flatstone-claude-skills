@@ -12,6 +12,9 @@ A collection of productivity skills for [Claude Code](https://claude.ai/code) th
 ### Session Management
 - **`/bye`** - Save session learnings to memory and exit gracefully
 
+### Account Management
+- **`/accounts`** - Auto-switch Claude accounts based on project directory
+
 ### Research
 - **`/name-check`** - Check product names for trademark conflicts and availability
 
@@ -173,6 +176,44 @@ Save session learnings before ending.
 
 ---
 
+### `/accounts` - Account Management
+
+Auto-switch Claude accounts based on project directory. Use different accounts for different project categories (e.g., work vs personal).
+
+```bash
+/accounts                          # List configured accounts
+/accounts add work                 # Add account with default patterns
+/accounts add work --pattern "*/WORK/*"  # Add with custom pattern
+/accounts remove work              # Remove an account
+/accounts show                     # Show generated shell function
+/accounts install                  # Install shell function to ~/.bashrc
+/accounts login work               # Login to specific account
+/accounts which                    # Check which account for current dir
+```
+
+**Setup workflow:**
+```bash
+# 1. Add accounts
+/accounts add personal
+/accounts add work --pattern "*/clients/*"
+
+# 2. Install shell function
+/accounts install
+
+# 3. Reload shell and login
+source ~/.bashrc
+/accounts login personal
+/accounts login work
+```
+
+**How it works:**
+- Stores config in `~/.claude-accounts.json`
+- Each account has its own config directory (`~/.claude-<name>`)
+- Generates a shell function that wraps `claude` and sets `CLAUDE_CONFIG_DIR`
+- Pattern matching auto-selects the right account when you `cd` into a project
+
+---
+
 ### `/name-check` - Name Availability Check
 
 Check product names for trademark conflicts.
@@ -227,6 +268,18 @@ Add this to your CLAUDE.md to enable slash commands:
 |---------|-------------|
 | `/bye` | Save learnings and exit gracefully |
 
+### Account Management
+
+| Command | Action | Description |
+|---------|--------|-------------|
+| `/accounts` | `python3 scripts/accounts.py list` | List configured accounts |
+| `/accounts add <name>` | `python3 scripts/accounts.py add <name>` | Add account |
+| `/accounts remove <name>` | `python3 scripts/accounts.py remove <name>` | Remove account |
+| `/accounts show` | `python3 scripts/accounts.py show` | Show shell function |
+| `/accounts install` | `python3 scripts/accounts.py install` | Install to ~/.bashrc |
+| `/accounts login <name>` | `python3 scripts/accounts.py login <name>` | Login to account |
+| `/accounts which` | `python3 scripts/accounts.py which` | Check current directory |
+
 ### Research
 
 | Command | Description |
@@ -246,7 +299,8 @@ flatstone-claude-skills/
 │   ├── setup.py           # Initial setup wizard
 │   ├── init.py            # Project initialization
 │   ├── catalog.py         # Catalog management
-│   └── ports.py           # Port management
+│   ├── ports.py           # Port management
+│   └── accounts.py        # Account switching
 ├── commands/
 │   ├── bye.md             # Session exit command
 │   └── ports.md           # Port management command
