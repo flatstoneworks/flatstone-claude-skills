@@ -2,11 +2,14 @@
 """
 Port Management Utility
 
-Manage ports for projects with port allocation tracking.
+Manage ports for projects. Reads from CATALOG.md (single source of truth).
 
 Usage:
     # Show all projects and allocations
     python3 ports.py show
+
+    # Show specific project
+    python3 ports.py show MyProject
 
     # Check for port conflicts
     python3 ports.py check
@@ -14,41 +17,31 @@ Usage:
     # Check if a specific port is available
     python3 ports.py available 3000
 
-    # Allocate a new port in current project
-    python3 ports.py allocate api 2
+    # Allocate a new port for a project
+    python3 ports.py allocate MyProject websocket 3
 """
 
 import argparse
-import json
 import re
 import socket
 import subprocess
 import sys
 from pathlib import Path
 
-# Import config - handle both installed and development scenarios
+# Import config and catalog - handle both installed and development scenarios
 try:
-    from config import get_config, get_catalog_file, get_categories
+    from config import get_config, get_catalog_file, get_categories, get_hostname
+    from catalog import (
+        get_all_entries, get_entry_by_name, get_all_allocated_ports,
+        update_entry_allocated, parse_port_range, format_allocated
+    )
 except ImportError:
     sys.path.insert(0, str(Path(__file__).parent))
-    from config import get_config, get_catalog_file, get_categories
-
-
-def load_project_config():
-    """Load ports.json from current directory or return None"""
-    ports_file = Path.cwd() / "ports.json"
-    if ports_file.exists():
-        with open(ports_file) as f:
-            return json.load(f)
-    return None
-
-
-def save_project_config(config):
-    """Save configuration to ports.json in current directory"""
-    ports_file = Path.cwd() / "ports.json"
-    with open(ports_file, 'w') as f:
-        json.dump(config, f, indent=2)
-    print(f"Saved to {ports_file}")
+    from config import get_config, get_catalog_file, get_categories, get_hostname
+    from catalog import (
+        get_all_entries, get_entry_by_name, get_all_allocated_ports,
+        update_entry_allocated, parse_port_range, format_allocated
+    )
 
 
 def is_port_in_use(port):
@@ -106,83 +99,101 @@ def format_process_info(process_info):
     return f" [{process_info['name']} pid={process_info['pid']}]"
 
 
-def find_all_port_configs():
-    """Find all ports.json files in workspace"""
-    config = get_config()
-    configs = []
-    seen_paths = set()
+def get_current_project():
+    """Try to determine the current project based on cwd."""
+    cwd = Path.cwd()
+    entries = get_all_entries()
 
-    for base_dir in config.project_dirs:
-        if not base_dir.exists():
-            continue
+    for entry in entries:
+        if entry.get('path'):
+            try:
+                project_path = Path(entry['path'])
+                if cwd == project_path or cwd.is_relative_to(project_path):
+                    return entry
+            except (ValueError, TypeError):
+                pass
 
-        # Check immediate subdirectories
-        for project_dir in base_dir.iterdir():
-            if project_dir.is_dir():
-                ports_file = project_dir / "ports.json"
-                if ports_file.exists() and str(ports_file) not in seen_paths:
-                    seen_paths.add(str(ports_file))
-                    try:
-                        with open(ports_file) as f:
-                            cfg = json.load(f)
-                            cfg['_path'] = str(ports_file)
-                            configs.append(cfg)
-                    except (json.JSONDecodeError, IOError):
-                        pass
+    # Also try matching by directory name
+    for entry in entries:
+        if entry['name'].lower() == cwd.name.lower():
+            return entry
 
-    return configs
-
-
-def get_all_allocated_ports(config):
-    """Get all allocated ports from a config"""
-    ports = []
-    project_name = config.get('project', 'unknown')
-
-    for name, port in config.get('allocated', {}).items():
-        ports.append({
-            'port': port,
-            'name': name,
-            'project': project_name,
-        })
-
-    return ports
+    return None
 
 
 def cmd_show(args):
     """Show port allocations"""
-    # Show current project if in a project directory
-    project_config = load_project_config()
+    entries = get_all_entries()
 
-    if project_config:
-        project_name = project_config.get('project')
-        base_port = project_config.get('basePort')
+    if args.project:
+        # Show specific project
+        entry = get_entry_by_name(args.project)
+        if not entry:
+            print(f"  Project '{args.project}' not found in catalog.")
+            print("\n  Available projects:")
+            for e in entries:
+                if e.get('base_port'):
+                    print(f"    - {e['name']}")
+            return
 
-        print(f"\n  Current Project: {project_name}")
-        print(f"  Base Port: {base_port}")
-        print(f"  Range: {base_port}-{base_port + project_config.get('range', 10) - 1}")
+        print(f"\n  Project: {entry['name']}")
+        print(f"  Category: {entry['category']}")
+        if entry.get('ports'):
+            print(f"  Ports: {entry['ports']}")
         print()
 
-        print("  Allocated Ports:")
-        for name, port in project_config.get('allocated', {}).items():
-            in_use = is_port_in_use(port)
-            process_info = get_port_process(port) if in_use else None
-            status = "" if in_use else ""
-            proc_str = format_process_info(process_info)
-            print(f"    {status} {name}: {port}{proc_str}")
+        allocated = entry.get('allocated_dict', {})
+        if allocated:
+            print("  Allocated Ports:")
+            for name, port in sorted(allocated.items(), key=lambda x: x[1]):
+                in_use = is_port_in_use(port)
+                process_info = get_port_process(port) if in_use else None
+                status = "" if in_use else ""
+                proc_str = format_process_info(process_info)
+                print(f"    {status} {name}: {port}{proc_str}")
+        else:
+            print("  No ports allocated yet.")
+
+        # Show available slots
+        if entry.get('base_port') and entry.get('port_range'):
+            base = entry['base_port']
+            range_size = entry['port_range']
+            used_offsets = set()
+            for port in allocated.values():
+                if base <= port < base + range_size:
+                    used_offsets.add(port - base)
+
+            available = [i for i in range(range_size) if i not in used_offsets]
+            if available:
+                print(f"\n  Available offsets: {available[:5]}{'...' if len(available) > 5 else ''}")
+
+        print()
+        return
+
+    # Show current project if in a project directory
+    current = get_current_project()
+    if current and current.get('base_port'):
+        print(f"\n  Current Project: {current['name']}")
+        print(f"  Ports: {current.get('ports', '-')}")
+        print()
+
+        allocated = current.get('allocated_dict', {})
+        if allocated:
+            print("  Allocated Ports:")
+            for name, port in sorted(allocated.items(), key=lambda x: x[1]):
+                in_use = is_port_in_use(port)
+                process_info = get_port_process(port) if in_use else None
+                status = "" if in_use else ""
+                proc_str = format_process_info(process_info)
+                print(f"    {status} {name}: {port}{proc_str}")
 
     # Show all ports across all projects
     print()
     print("  " + "=" * 60)
-    print("  All Ports (All Projects)")
+    print("  All Ports (from CATALOG.md)")
     print("  " + "=" * 60)
 
-    all_configs = find_all_port_configs()
-    all_ports = []
-
-    for cfg in all_configs:
-        all_ports.extend(get_all_allocated_ports(cfg))
-
-    all_ports.sort(key=lambda x: x['port'])
+    all_ports = get_all_allocated_ports()
 
     if all_ports:
         for entry in all_ports:
@@ -198,25 +209,35 @@ def cmd_show(args):
 
 
 def cmd_check(args):
-    """Check for port conflicts in current project"""
-    config = load_project_config()
+    """Check for port conflicts"""
+    if args.project:
+        entry = get_entry_by_name(args.project)
+        if not entry:
+            print(f"  Project '{args.project}' not found.")
+            return
+    else:
+        entry = get_current_project()
+        if not entry:
+            print("  Not in a project directory and no project specified.")
+            print("  Usage: ports.py check [project_name]")
+            return
 
-    if not config:
-        print("No ports.json found in current directory.")
-        print("Run 'init.py' to initialize a project.")
+    if not entry.get('base_port'):
+        print(f"  Project '{entry['name']}' has no port range defined.")
         return
 
-    base_port = config.get('basePort')
-    range_size = config.get('range', 10)
+    base_port = entry['base_port']
+    range_size = entry.get('port_range', 10)
+    allocated = entry.get('allocated_dict', {})
 
-    print(f"\n  Checking ports {base_port}-{base_port + range_size - 1}...")
+    print(f"\n  Checking ports {base_port}-{base_port + range_size - 1} for {entry['name']}...")
     print()
 
     conflicts = 0
     for i in range(range_size):
         port = base_port + i
         allocated_name = None
-        for name, p in config.get('allocated', {}).items():
+        for name, p in allocated.items():
             if p == port:
                 allocated_name = name
                 break
@@ -250,6 +271,14 @@ def cmd_available(args):
         process_info = get_port_process(port)
         proc_str = format_process_info(process_info)
         print(f"  Port {port} is in use{proc_str}")
+
+        # Check if it's allocated to a project
+        all_ports = get_all_allocated_ports()
+        for entry in all_ports:
+            if entry['port'] == port:
+                print(f"  Allocated to: {entry['project']} ({entry['name']})")
+                break
+
         sys.exit(1)
     else:
         print(f"  Port {port} is available")
@@ -257,36 +286,90 @@ def cmd_available(args):
 
 
 def cmd_allocate(args):
-    """Allocate a new port in current project"""
-    config = load_project_config()
+    """Allocate a new port for a project"""
+    project_name = args.project
+    port_name = args.name
+    offset = args.offset
 
-    if not config:
-        print("No ports.json found in current directory.")
-        print("Run 'init.py' to initialize a project.")
-        return
-
-    base_port = config.get('basePort')
-    range_size = config.get('range', 10)
-    port = base_port + args.offset
-
-    if args.offset >= range_size:
-        print(f"Error: Offset {args.offset} is outside range (0-{range_size - 1})")
-        return
-
-    # Check if already allocated
-    for name, p in config.get('allocated', {}).items():
-        if p == port:
-            print(f"Port {port} already allocated to '{name}'")
+    entry = get_entry_by_name(project_name)
+    if not entry:
+        # Try current directory
+        current = get_current_project()
+        if current:
+            entry = current
+            project_name = entry['name']
+        else:
+            print(f"  Project '{project_name}' not found in catalog.")
             return
 
-    config['allocated'][args.name] = port
-    save_project_config(config)
-    print(f"Allocated port {port} to '{args.name}'")
+    if not entry.get('base_port'):
+        print(f"  Project '{entry['name']}' has no port range defined.")
+        return
+
+    base_port = entry['base_port']
+    range_size = entry.get('port_range', 10)
+    allocated = entry.get('allocated_dict', {}).copy()
+
+    if offset >= range_size:
+        print(f"  Error: Offset {offset} is outside range (0-{range_size - 1})")
+        return
+
+    port = base_port + offset
+
+    # Check if already allocated
+    for name, p in allocated.items():
+        if p == port:
+            print(f"  Port {port} already allocated to '{name}'")
+            return
+
+    # Check if name already used
+    if port_name in allocated:
+        print(f"  Name '{port_name}' already allocated to port {allocated[port_name]}")
+        return
+
+    # Add new allocation
+    allocated[port_name] = port
+
+    # Update catalog
+    if update_entry_allocated(entry['name'], allocated):
+        print(f"  Allocated port {port} to '{port_name}' in {entry['name']}")
+        print(f"  Updated CATALOG.md")
+    else:
+        print(f"  Failed to update catalog")
+
+
+def cmd_find(args):
+    """Find which project uses a port"""
+    port = args.port
+
+    all_ports = get_all_allocated_ports()
+    for entry in all_ports:
+        if entry['port'] == port:
+            print(f"  Port {port} is allocated to:")
+            print(f"    Project: {entry['project']}")
+            print(f"    Name: {entry['name']}")
+            print(f"    Category: {entry['category']}")
+
+            in_use = is_port_in_use(port)
+            if in_use:
+                process_info = get_port_process(port)
+                proc_str = format_process_info(process_info)
+                print(f"    Status:  IN USE{proc_str}")
+            else:
+                print(f"    Status:  Not running")
+            return
+
+    print(f"  Port {port} is not allocated to any project")
+
+    if is_port_in_use(port):
+        process_info = get_port_process(port)
+        proc_str = format_process_info(process_info)
+        print(f"  But it IS in use{proc_str}")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Port management utility",
+        description="Port management utility (reads from CATALOG.md)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
@@ -294,10 +377,12 @@ def main():
     subparsers = parser.add_subparsers(dest='command', help='Commands')
 
     # show
-    subparsers.add_parser('show', help='Show port allocations')
+    show_parser = subparsers.add_parser('show', help='Show port allocations')
+    show_parser.add_argument('project', nargs='?', help='Show specific project')
 
     # check
-    subparsers.add_parser('check', help='Check for port conflicts')
+    check_parser = subparsers.add_parser('check', help='Check for port conflicts')
+    check_parser.add_argument('project', nargs='?', help='Project to check (default: current directory)')
 
     # available
     avail_parser = subparsers.add_parser('available', help='Check if a port is available')
@@ -305,8 +390,13 @@ def main():
 
     # allocate
     alloc_parser = subparsers.add_parser('allocate', help='Allocate a new port')
-    alloc_parser.add_argument('name', help='Name for the port')
+    alloc_parser.add_argument('project', help='Project name')
+    alloc_parser.add_argument('name', help='Name for the port (e.g., websocket)')
     alloc_parser.add_argument('offset', type=int, help='Offset from base port')
+
+    # find
+    find_parser = subparsers.add_parser('find', help='Find which project uses a port')
+    find_parser.add_argument('port', type=int, help='Port number to find')
 
     args = parser.parse_args()
 
@@ -318,7 +408,10 @@ def main():
         cmd_available(args)
     elif args.command == 'allocate':
         cmd_allocate(args)
+    elif args.command == 'find':
+        cmd_find(args)
     elif args.command is None:
+        args.project = None
         cmd_show(args)
     else:
         parser.print_help()

@@ -3,6 +3,7 @@
 Development Catalog Utility
 
 Manage the project/skill registry in CATALOG.md.
+CATALOG.md is the single source of truth for all project data including port allocations.
 
 Usage:
     # Show full catalog summary
@@ -58,15 +59,82 @@ def get_category_names():
     return list(get_categories().keys())
 
 
+def parse_allocated(allocated_str):
+    """Parse the Allocated field into a dict.
+
+    Format: 'frontend:3000, backend:3001, websocket:3003'
+    Returns: {'frontend': 3000, 'backend': 3001, 'websocket': 3003}
+    """
+    if not allocated_str:
+        return {}
+
+    result = {}
+    parts = allocated_str.split(',')
+    for part in parts:
+        part = part.strip()
+        if ':' in part:
+            name, port_str = part.split(':', 1)
+            try:
+                result[name.strip()] = int(port_str.strip())
+            except ValueError:
+                pass
+    return result
+
+
+def format_allocated(allocated_dict):
+    """Format allocated dict back to string.
+
+    Input: {'frontend': 3000, 'backend': 3001}
+    Output: 'frontend:3000, backend:3001'
+    """
+    if not allocated_dict:
+        return ""
+    parts = [f"{name}:{port}" for name, port in sorted(allocated_dict.items(), key=lambda x: x[1])]
+    return ", ".join(parts)
+
+
+def parse_port_range(ports_str):
+    """Parse port range string into (base_port, range_size).
+
+    '3000-3009' -> (3000, 10)
+    '3000' -> (3000, 10)
+    """
+    if not ports_str:
+        return None, None
+
+    # Remove any extra info like "(Frontend: 3000, Backend: 3001)"
+    ports_str = re.sub(r'\s*\([^)]+\)', '', ports_str).strip()
+
+    if '-' in ports_str:
+        parts = ports_str.split('-')
+        try:
+            start = int(parts[0].strip())
+            end = int(parts[1].strip())
+            return start, end - start + 1
+        except (ValueError, IndexError):
+            return None, None
+    else:
+        try:
+            return int(ports_str.strip()), 10
+        except ValueError:
+            return None, None
+
+
 def parse_entries(content):
-    """Parse catalog content into structured entries"""
+    """Parse catalog content into structured entries.
+
+    Returns list of dicts with keys:
+    - name, category, type, path, ports, allocated, stack, github, status, description
+    - base_port, port_range (parsed from ports)
+    - allocated_dict (parsed from allocated)
+    """
     entries = []
     current_category = None
     current_entry = None
     category_names = get_category_names()
 
     # Add special stop sections
-    stop_sections = ["Quick Reference"]
+    stop_sections = ["Quick Reference", "Entry Format Reference"]
 
     lines = content.split('\n')
     i = 0
@@ -98,11 +166,15 @@ def parse_entries(content):
                 'type': None,
                 'path': None,
                 'ports': None,
+                'allocated': None,
                 'stack': None,
                 'github': None,
                 'status': None,
                 'description': None,
                 'line_start': i,
+                'base_port': None,
+                'port_range': None,
+                'allocated_dict': {},
             }
 
         # Parse table properties
@@ -116,6 +188,12 @@ def parse_entries(content):
                     current_entry['path'] = value.strip('`')
                 elif key == 'ports':
                     current_entry['ports'] = value
+                    base, range_size = parse_port_range(value)
+                    current_entry['base_port'] = base
+                    current_entry['port_range'] = range_size
+                elif key == 'allocated':
+                    current_entry['allocated'] = value
+                    current_entry['allocated_dict'] = parse_allocated(value)
                 elif key == 'stack':
                     current_entry['stack'] = value
                 elif key == 'github':
@@ -132,6 +210,115 @@ def parse_entries(content):
         entries.append(current_entry)
 
     return entries
+
+
+def get_all_entries():
+    """Get all parsed entries from CATALOG.md.
+
+    This is the main API for other modules to access catalog data.
+    """
+    content = load_catalog()
+    if not content:
+        return []
+    return parse_entries(content)
+
+
+def get_entry_by_name(name):
+    """Get a specific entry by name (case-insensitive)."""
+    entries = get_all_entries()
+    for entry in entries:
+        if entry['name'].lower() == name.lower():
+            return entry
+    return None
+
+
+def get_all_allocated_ports():
+    """Get all allocated ports across all projects.
+
+    Returns list of dicts: {'port': int, 'name': str, 'project': str, 'category': str}
+    """
+    entries = get_all_entries()
+    ports = []
+
+    for entry in entries:
+        project_name = entry['name']
+        category = entry['category']
+
+        for alloc_name, port in entry.get('allocated_dict', {}).items():
+            ports.append({
+                'port': port,
+                'name': alloc_name,
+                'project': project_name,
+                'category': category,
+            })
+
+    return sorted(ports, key=lambda x: x['port'])
+
+
+def update_entry_allocated(entry_name, allocated_dict):
+    """Update the Allocated field for an entry.
+
+    Args:
+        entry_name: Name of the entry to update
+        allocated_dict: New allocated dict {'frontend': 3000, ...}
+
+    Returns True on success, False on failure.
+    """
+    content = load_catalog()
+    if not content:
+        return False
+
+    entries = parse_entries(content)
+    entry = None
+    for e in entries:
+        if e['name'].lower() == entry_name.lower():
+            entry = e
+            break
+
+    if not entry:
+        return False
+
+    allocated_str = format_allocated(allocated_dict)
+
+    # Find and update the Allocated line
+    lines = content.split('\n')
+
+    # Look for existing Allocated line after the entry header
+    in_entry = False
+    allocated_line_idx = None
+    ports_line_idx = None
+    table_end_idx = None
+
+    for i, line in enumerate(lines):
+        if line.startswith('### ') and entry['name'] in line:
+            in_entry = True
+            continue
+
+        if in_entry:
+            if line.startswith('### ') or line.startswith('## '):
+                # Next entry/section
+                break
+            if line.startswith('| Allocated |'):
+                allocated_line_idx = i
+            if line.startswith('| Ports |'):
+                ports_line_idx = i
+            if line.startswith('|') and 'Property' not in line and '----' not in line:
+                table_end_idx = i
+
+    if allocated_line_idx is not None:
+        # Update existing line
+        lines[allocated_line_idx] = f"| Allocated | {allocated_str} |"
+    elif ports_line_idx is not None:
+        # Insert after Ports line
+        lines.insert(ports_line_idx + 1, f"| Allocated | {allocated_str} |")
+    else:
+        # Couldn't find right place
+        return False
+
+    new_content = '\n'.join(lines)
+    catalog_file = get_catalog_file()
+    catalog_file.write_text(new_content)
+    return True
 
 
 def format_entry_summary(entry):
@@ -256,6 +443,17 @@ def cmd_add(args):
         # Get ports (optional)
         ports = input("  Ports (e.g., 3000-3009): ").strip()
 
+        # Get allocated (optional, auto-generate if ports provided)
+        if ports:
+            base_port, _ = parse_port_range(ports)
+            if base_port:
+                default_allocated = f"frontend:{base_port}, backend:{base_port + 1}"
+                allocated = input(f"  Allocated [{default_allocated}]: ").strip() or default_allocated
+            else:
+                allocated = input("  Allocated (e.g., frontend:3000, backend:3001): ").strip()
+        else:
+            allocated = ""
+
         # Get stack (optional)
         stack = input("  Stack (comma-separated): ").strip()
 
@@ -280,6 +478,8 @@ def cmd_add(args):
             entry_md += f"\n| Path | `{path}` |"
         if ports:
             entry_md += f"\n| Ports | {ports} |"
+        if allocated:
+            entry_md += f"\n| Allocated | {allocated} |"
         if stack:
             entry_md += f"\n| Stack | {stack} |"
         if github:
@@ -352,6 +552,7 @@ def cmd_update(args):
     print(f"  Type: {entry.get('type', '-')}")
     print(f"  Status: {entry.get('status', '-')}")
     print(f"  Ports: {entry.get('ports', '-')}")
+    print(f"  Allocated: {entry.get('allocated', '-')}")
     print()
     print("  To update, edit CATALOG.md directly at line", entry['line_start'] + 1)
     print(f"  File: {catalog_file}")

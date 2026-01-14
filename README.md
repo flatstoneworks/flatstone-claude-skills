@@ -27,6 +27,35 @@ When working with Claude Code on multiple projects, it's helpful to:
 
 These skills automate the tedious parts of project management so you can focus on building.
 
+## Architecture
+
+**CATALOG.md is the single source of truth** for all project and port data.
+
+```
+CATALOG.md
+    └── Contains all project entries with:
+        ├── Project metadata (name, type, path, stack)
+        ├── Port ranges (e.g., 3000-3009)
+        └── Allocated ports (e.g., frontend:3000, backend:3001)
+
+/init ──────► Writes to CATALOG.md
+/catalog ───► Reads from CATALOG.md
+/ports ─────► Reads/writes CATALOG.md
+```
+
+### Allocated Port Format
+
+Each project entry in CATALOG.md can have an `Allocated` field:
+
+```markdown
+| Allocated | frontend:3000, backend:3001, websocket:3003 |
+```
+
+This format is:
+- Human-readable in the markdown file
+- Parsed by `/ports` to show status and detect conflicts
+- Updated by `/ports allocate` when adding new port assignments
+
 ## Installation
 
 ### Quick Install
@@ -92,9 +121,9 @@ Override config with environment variables:
 ```
 
 **What it does:**
-1. Creates `ports.json` in your project directory
-2. Adds the project to `CATALOG.md`
-3. Suggests the next available port in your category
+1. Registers the project in `CATALOG.md` with port allocations
+2. Suggests the next available port in your category
+3. Sets up default allocations (frontend, backend)
 
 ---
 
@@ -114,13 +143,15 @@ View and manage your project registry.
 
 ### `/ports` - Port Management
 
-Manage port allocations across projects.
+Manage port allocations across projects. Reads directly from `CATALOG.md`.
 
 ```bash
 /ports                      # Show all port allocations
-/ports check                # Check for conflicts
+/ports show MyProject       # Show specific project's ports
+/ports check                # Check for conflicts in current project
 /ports available 3000       # Check if port is available
-/ports allocate api 2       # Allocate port at offset 2
+/ports allocate MyProject api 2  # Allocate port at offset 2
+/ports find 3000            # Find which project uses a port
 ```
 
 ---
@@ -184,8 +215,11 @@ Add this to your CLAUDE.md to enable slash commands:
 | Command | Action | Description |
 |---------|--------|-------------|
 | `/ports` | `python3 scripts/ports.py show` | Show all ports |
+| `/ports show <project>` | `python3 scripts/ports.py show <project>` | Show project ports |
 | `/ports check` | `python3 scripts/ports.py check` | Check conflicts |
 | `/ports available <port>` | `python3 scripts/ports.py available <port>` | Check availability |
+| `/ports allocate <project> <name> <offset>` | `python3 scripts/ports.py allocate ...` | Allocate port |
+| `/ports find <port>` | `python3 scripts/ports.py find <port>` | Find port owner |
 
 ### Session Management
 

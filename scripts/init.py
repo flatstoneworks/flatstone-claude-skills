@@ -17,7 +17,6 @@ Usage:
 """
 
 import argparse
-import json
 import re
 import sys
 from pathlib import Path
@@ -78,27 +77,7 @@ def get_next_available_port(category):
     return base + 1000
 
 
-def create_ports_json(project_dir, project_name, base_port):
-    """Create ports.json in the project directory"""
-    ports_file = project_dir / "ports.json"
-
-    config = {
-        "project": project_name,
-        "basePort": base_port,
-        "range": 10,
-        "allocated": {
-            "frontend": base_port,
-            "backend": base_port + 1
-        }
-    }
-
-    with open(ports_file, 'w') as f:
-        json.dump(config, f, indent=2)
-
-    return ports_file
-
-
-def add_to_catalog(name, category, entry_type, path, ports, stack, github, description):
+def add_to_catalog(name, category, entry_type, path, ports, allocated, stack, github, description):
     """Add a new entry to CATALOG.md"""
     catalog_file = get_catalog_file()
     content = catalog_file.read_text()
@@ -114,6 +93,8 @@ def add_to_catalog(name, category, entry_type, path, ports, stack, github, descr
         entry_md += f"\n| Path | `{path}` |"
     if ports:
         entry_md += f"\n| Ports | {ports} |"
+    if allocated:
+        entry_md += f"\n| Allocated | {allocated} |"
     if stack:
         entry_md += f"\n| Stack | {stack} |"
     if github:
@@ -195,20 +176,6 @@ def main():
     print(f"  Directory: {project_dir}")
     print(f"  Project: {project_name}")
     print()
-
-    # Check if already initialized
-    ports_file = project_dir / "ports.json"
-    if ports_file.exists():
-        print(f"  This project already has ports.json!")
-        with open(ports_file) as f:
-            existing = json.load(f)
-        print(f"  Base port: {existing.get('basePort')}")
-        print()
-        response = input("  Reinitialize? [y/N]: ").strip().lower()
-        if response != 'y':
-            print("  Cancelled.")
-            return
-        print()
 
     # Get category
     if args.category:
@@ -318,10 +285,11 @@ def main():
 
     print()
 
-    # Create ports.json
+    # Build allocated string for default ports
     if base_port:
-        ports_file = create_ports_json(project_dir, project_name, base_port)
-        print(f"  Created: {ports_file}")
+        allocated_str = f"frontend:{base_port}, backend:{base_port + 1}"
+    else:
+        allocated_str = None
 
     # Add to catalog
     success = add_to_catalog(
@@ -330,6 +298,7 @@ def main():
         entry_type=entry_type,
         path=str(project_dir),
         ports=ports_str,
+        allocated=allocated_str,
         stack=stack,
         github=github,
         description=description
@@ -354,8 +323,9 @@ def main():
     print()
     print("  Next steps:")
     print("    1. Create your project structure")
-    print("    2. Run 'catalog.py' to verify registration")
-    print("    3. Start building!")
+    print("    2. Run '/ports' to see port allocations")
+    print("    3. Use '/ports allocate <name> <offset>' to add more ports")
+    print("    4. Start building!")
     print()
 
 
