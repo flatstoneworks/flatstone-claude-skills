@@ -4,9 +4,16 @@ A collection of productivity skills for [Claude Code](https://claude.ai/code) th
 
 ## Features
 
+### Project Management
 - **`/init`** - Initialize new projects with port allocation and catalog registration
 - **`/catalog`** - View and manage your project registry
 - **`/ports`** - Port management utilities
+
+### Session Management
+- **`/bye`** - Save session learnings to memory and exit gracefully
+
+### Research
+- **`/name-check`** - Check product names for trademark conflicts and availability
 
 ## Why?
 
@@ -15,6 +22,8 @@ When working with Claude Code on multiple projects, it's helpful to:
 1. **Track all your projects** in one place
 2. **Avoid port conflicts** between projects
 3. **Maintain consistency** in project setup
+4. **Preserve learnings** between sessions
+5. **Validate names** before committing to them
 
 These skills automate the tedious parts of project management so you can focus on building.
 
@@ -28,15 +37,16 @@ git clone https://github.com/flatstoneworks/flatstone-claude-skills.git
 cd flatstone-claude-skills
 
 # Run setup
-python3 scripts/setup.py
+./install.sh
 ```
 
 ### Manual Install
 
 1. Clone this repository
-2. Copy the `scripts/` directory to your workspace
+2. Copy the `scripts/` and `commands/` directories to your workspace
 3. Run `python3 scripts/setup.py` to configure
 4. Add the CLAUDE.md snippet to your project's CLAUDE.md
+5. Copy commands to `.claude/commands/` for slash command support
 
 ## Configuration
 
@@ -64,55 +74,88 @@ Override config with environment variables:
 - `CLAUDE_SKILLS_CATALOG` - Path to CATALOG.md
 - `CLAUDE_SKILLS_CONFIG` - Path to config file
 
-## Usage
+## Skills Reference
 
-### Initialize a New Project
+### `/init` - Project Initialization
 
-```bash
-# Create project directory
-mkdir my-new-project
-cd my-new-project
-
-# Run init (interactive)
-python3 ../scripts/init.py
-
-# Or with options
-python3 ../scripts/init.py --category WORK --port 3050 --stack react-fastapi
-```
-
-This will:
-1. Create `ports.json` in your project directory
-2. Add the project to `CATALOG.md`
-3. Suggest the next available port in your category
-
-### View Your Catalog
+**MANDATORY** when starting any new project.
 
 ```bash
-# Show all projects
-python3 scripts/catalog.py
+# Interactive mode
+/init
 
-# Show specific category
-python3 scripts/catalog.py show WORK
+# Quick mode with options
+/init --category WORK --port 3050 --stack react-fastapi
 
-# Add a new entry manually
-python3 scripts/catalog.py add
+# View all options
+/init --help
 ```
 
-### Manage Ports
+**What it does:**
+1. Creates `ports.json` in your project directory
+2. Adds the project to `CATALOG.md`
+3. Suggests the next available port in your category
+
+---
+
+### `/catalog` - Catalog Management
+
+View and manage your project registry.
 
 ```bash
-# Show all port allocations
-python3 scripts/ports.py
-
-# Check for conflicts in current project
-python3 scripts/ports.py check
-
-# Check if a specific port is available
-python3 scripts/ports.py available 3000
-
-# Allocate a new port
-python3 scripts/ports.py allocate websocket 3
+/catalog                    # Show full catalog
+/catalog WORK               # Show specific category
+/catalog add                # Add new entry interactively
+/catalog update MyProject   # Update existing entry
+/catalog list               # List all entries
 ```
+
+---
+
+### `/ports` - Port Management
+
+Manage port allocations across projects.
+
+```bash
+/ports                      # Show all port allocations
+/ports check                # Check for conflicts
+/ports available 3000       # Check if port is available
+/ports allocate api 2       # Allocate port at offset 2
+```
+
+---
+
+### `/bye` - Graceful Session Exit
+
+Save session learnings before ending.
+
+```bash
+/bye
+```
+
+**What it does:**
+1. Reviews session accomplishments
+2. Updates CLAUDE.md with new learnings
+3. Updates CATALOG.md if new projects were created
+4. Summarizes what was saved
+5. Exits the session
+
+---
+
+### `/name-check` - Name Availability Check
+
+Check product names for trademark conflicts.
+
+```bash
+/name-check PieBox, PieHub, PieCore
+/name-check --domain software --names "AppName1, AppName2"
+```
+
+**What it does:**
+1. Searches for trademark conflicts
+2. Checks for existing products/startups
+3. Returns RED/YELLOW/GREEN status for each name
+4. Recommends which names are safe to use
 
 ## CLAUDE.md Integration
 
@@ -122,8 +165,6 @@ Add this to your CLAUDE.md to enable slash commands:
 ## Claude Skills Commands
 
 ### Project Initialization (MANDATORY)
-
-When starting a new project, run `/init` to allocate ports and register in the catalog.
 
 | Command | Action | Description |
 |---------|--------|-------------|
@@ -145,6 +186,18 @@ When starting a new project, run `/init` to allocate ports and register in the c
 | `/ports` | `python3 scripts/ports.py show` | Show all ports |
 | `/ports check` | `python3 scripts/ports.py check` | Check conflicts |
 | `/ports available <port>` | `python3 scripts/ports.py available <port>` | Check availability |
+
+### Session Management
+
+| Command | Description |
+|---------|-------------|
+| `/bye` | Save learnings and exit gracefully |
+
+### Research
+
+| Command | Description |
+|---------|-------------|
+| `/name-check <names>` | Check names for trademark conflicts |
 ```
 
 ## Project Structure
@@ -153,16 +206,21 @@ When starting a new project, run `/init` to allocate ports and register in the c
 flatstone-claude-skills/
 ├── README.md
 ├── LICENSE
+├── install.sh
 ├── scripts/
-│   ├── config.py      # Configuration management
-│   ├── setup.py       # Initial setup wizard
-│   ├── init.py        # Project initialization
-│   ├── catalog.py     # Catalog management
-│   └── ports.py       # Port management
-├── templates/
-│   └── CATALOG.md     # Catalog template
-└── docs/
-    └── ...            # Additional documentation
+│   ├── config.py          # Configuration management
+│   ├── setup.py           # Initial setup wizard
+│   ├── init.py            # Project initialization
+│   ├── catalog.py         # Catalog management
+│   └── ports.py           # Port management
+├── commands/
+│   ├── bye.md             # Session exit command
+│   └── ports.md           # Port management command
+├── skills/
+│   └── name-check.md      # Name availability checker
+└── templates/
+    ├── CATALOG.md         # Catalog template
+    └── CLAUDE_SNIPPET.md  # CLAUDE.md snippet
 ```
 
 ## Customization
